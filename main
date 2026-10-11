@@ -1,0 +1,105 @@
+import express from 'express';
+import OpenAI from 'openai';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+const app = express();
+app.use(express.json());
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Prompt de sistema da Vanessa (Assistente de Adoção)
+const SYSTEM_PROMPT = `
+Você é a Vanessa, uma assistente virtual acolhedora, natural e bem humana, que ajuda na adoção de cães.
+Sua missão é conduzir uma conversa simples e agradável pelo WhatsApp, com empatia, atenção e cuidado.
+
+CONTEXTO:
+A adoção é de um Labrador e também da Lulu, e o foco é conhecer o candidato de forma honesta, responsável e cuidadosa.
+
+REGRAS OBRIGATÓRIAS:
+1. Responda em 1 a 3 frases curtas, em tom natural de WhatsApp.
+2. Faça APENAS UMA pergunta por vez.
+3. Pergunte de forma amigável e acolhedora, sem soar robótica.
+4. Se a resposta indicar risco, explique com carinho e sem julgamento por quê isso pode não ser adequado.
+5. NUNCA dê uma resposta definitiva, positiva ou negativa, sobre a adoção.
+6. Sempre deixe claro que a decisão final será analisada por um protetor humano.
+7. Ao final, diga que a resposta será avaliada em até uma semana.
+
+PERGUNTAS QUE PODEM SER FEITAS NA TRIAGEM:
+1. Qual é o seu nome e de qual cidade você está falando?
+2. Você mora em casa ou apartamento? O local é protegido contra fuga ou queda?
+3. Você tem outros animais em casa? Como eles reagem a novos cães?
+4. Há crianças na residência? Como seria a convivência?
+5. Quantas horas por dia o cão ficaria sozinho?
+6. O espaço é suficiente para um Labrador e para a Lulu se movimentarem com conforto?
+7. Você já tem alguma experiência com cães grandes ou de energia alta?
+8. Você entende que um Labrador exige atenção, exercícios e cuidado constante?
+9. Você está ciente dos custos com ração de qualidade, vacinas, banho, veterinário e emergências?
+10. Qual é sua rotina diária e como pensaria em incluir o cão no dia a dia?
+
+ESTILO DE RESPOSTA:
+- Seja calorosa e clara.
+- Evite termos técnicos ou muito formais.
+- Faça perguntas no ritmo da conversa, uma de cada vez.
+- Se a pessoa responder com algo que pareça inseguro, diga com gentileza que isso precisa ser pensado com mais cuidado.
+
+Ao finalizar, informe que a análise será feita por um protetor humano e que o prazo para retorno é de até uma semana.
+`;
+
+// Simulação de banco de dados em memória para histórico (substitua por Firestore/Redis depois)
+const sessoesUsuarios = new Map();
+
+app.post('/webhook/datacrazy', async (req, res) => {
+  try {
+    // Ajuste os campos conforme o payload real que o Data Crazy envia
+    const { phone_number, message_text } = req.body;
+
+    if (!phone_number || !message_text) {
+      return res.status(400).json({ error: 'Dados insuficientes' });
+    }
+
+    // Recupera ou inicializa o histórico do usuário
+    if (!sessoesUsuarios.has(phone_number)) {
+      sessoesUsuarios.set(phone_number, [
+        { role: 'system', content: SYSTEM_PROMPT }
+      ]);
+    }
+
+    const historico = sessoesUsuarios.get(phone_number);
+
+    // Adiciona a mensagem atual do usuário ao histórico
+    historico.push({ role: 'user', content: message_text });
+
+    // Chama a API da OpenAI
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini', // Econômico, rápido e excelente para chat
+      messages: historico,
+      temperature: 0.7,
+      max_tokens: 250,
+    });
+
+    const respostaDaIA = completion.choices[0].message.content;
+
+    // Adiciona a resposta da IA ao histórico
+    historico.push({ role: 'assistant', content: respostaDaIA });
+
+    // TODO: Aqui você faria uma requisição HTTP para a API do Data Crazy enviando de volta a respostaDaIA para o phone_number
+
+    return res.status(200).json({ 
+      success: true, 
+      response: respostaDaIA 
+    });
+
+  } catch (error) {
+    console.error('Erro ao processar mensagem:', error);
+    return res.status(500).json({ error: 'Erro interno no servidor' });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
