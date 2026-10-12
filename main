@@ -52,45 +52,81 @@ Ao finalizar, informe que a análise será feita por um protetor humano e que o 
 // Simulação de banco de dados em memória para histórico (substitua por Firestore/Redis depois)
 const sessoesUsuarios = new Map();
 
+const normalizarTelefone = (valor) => {
+  if (!valor) return null;
+  return String(valor).replace(/\D/g, '');
+};
+
+const extrairMensagemDoWebhook = (body = {}) => {
+  const { phone_number, message_text, to, message } = body;
+  const phone = normalizarTelefone(phone_number ?? to);
+  const text = message_text ?? message ?? '';
+
+  return { phone, text: String(text).trim() };
+};
+
+app.get('/', (req, res) => {
+  return res.status(200).json({
+    ok: true,
+    message: 'Webhook da Vanessa está online.',
+    routes: ['/webhook/datacrazy']
+  });
+});
+
+app.get('/webhook/datacrazy', (req, res) => {
+  return res.status(200).json({
+    ok: true,
+    message: 'Webhook do Data Crazy ativo.'
+  });
+});
+
 app.post('/webhook/datacrazy', async (req, res) => {
   try {
-    // Ajuste os campos conforme o payload real que o Data Crazy envia
-    const { phone_number, message_text } = req.body;
+    const { phone, text } = extrairMensagemDoWebhook(req.body);
 
-    if (!phone_number || !message_text) {
-      return res.status(400).json({ error: 'Dados insuficientes' });
+    if (!phone || !text) {
+      return res.status(400).json({
+        error: 'Dados insuficientes',
+        esperado: {
+          phone_number: '5511999999999',
+          message_text: 'Olá'
+        }
+      });
     }
 
     // Recupera ou inicializa o histórico do usuário
-    if (!sessoesUsuarios.has(phone_number)) {
-      sessoesUsuarios.set(phone_number, [
+    if (!sessoesUsuarios.has(phone)) {
+      sessoesUsuarios.set(phone, [
         { role: 'system', content: SYSTEM_PROMPT }
       ]);
     }
 
-    const historico = sessoesUsuarios.get(phone_number);
+    const historico = sessoesUsuarios.get(phone);
 
-    // Adiciona a mensagem atual do usuário ao histórico
-    historico.push({ role: 'user', content: message_text });
+    // Mantém o contexto útil e evita crescimento infinito
+    const historicoLimitado = historico.slice(-20);
+    historicoLimitado.push({ role: 'user', content: text });
 
     // Chama a API da OpenAI
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // Econômico, rápido e excelente para chat
-      messages: historico,
+      model: 'gpt-4o-mini',
+      messages: historicoLimitado,
       temperature: 0.7,
       max_tokens: 250,
     });
 
-    const respostaDaIA = completion.choices[0].message.content;
+    const respostaDaIA = completion.choices[0]?.message?.content || 'Não consegui processar sua mensagem agora.';
 
-    // Adiciona a resposta da IA ao histórico
+    // Atualiza o histórico com a resposta da IA
+    historico.push({ role: 'user', content: text });
     historico.push({ role: 'assistant', content: respostaDaIA });
 
     // TODO: Aqui você faria uma requisição HTTP para a API do Data Crazy enviando de volta a respostaDaIA para o phone_number
 
-    return res.status(200).json({ 
-      success: true, 
-      response: respostaDaIA 
+    return res.status(200).json({
+      success: true,
+      response: respostaDaIA,
+      phone
     });
 
   } catch (error) {
